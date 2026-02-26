@@ -8,7 +8,7 @@ GET  /drills/shadowing/{show_id} — get subtitle lines for shadowing session
 POST /drills/shadowing/compare   — compare shadowing attempt pitch
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from db import get_db, FailureLog
@@ -97,7 +97,7 @@ async def speak_shadowing_line(card_id: int, db: Session = Depends(get_db)):
 @router.post("/shadowing/{card_id}/compare", response_model=PitchCompareResponse)
 async def compare_shadowing(
     card_id: int,
-    attempt_audio: bytes,
+    audio_file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
     """Compare user shadowing attempt against TTS reference pitch."""
@@ -107,8 +107,9 @@ async def compare_shadowing(
     if not card or not card.example_sentence:
         raise HTTPException(status_code=404, detail="Card or sentence not found")
 
+    attempt_bytes = await audio_file.read()
     reference = await get_pitch_contour_async(card.example_sentence)
-    result = await compare_contours_async(reference.pattern, attempt_audio)
+    result = await compare_contours_async(reference.pattern, attempt_bytes)
 
     # Log pitch mismatches to failure_log
     if result.match_ratio < 0.5:

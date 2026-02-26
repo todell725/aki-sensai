@@ -116,6 +116,8 @@ export function useVoiceStream({
         if (msg.type === "transcript") {
           onTranscript?.(msg.text);
           setTurns((prev) => [...prev, { role: "user", text: msg.text }]);
+        } else if (msg.type === "assistant_text") {
+          setTurns((prev) => [...prev, { role: "assistant", text: msg.text }]);
         } else if (msg.type === "tts_end") {
           setIsPlaying(false);
         } else if (msg.type === "latency") {

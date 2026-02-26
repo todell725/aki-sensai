@@ -171,10 +171,11 @@ async def voice_websocket(websocket: WebSocket, db: Session = Depends(get_db)):
             t_tts_end = time.perf_counter()
             tts_ms = (t_tts_end - t_tts_start) * 1000
 
-            await send_json({"type": "tts_end"})
-
             response_text = "".join(full_response)
             conversation.append({"role": "assistant", "content": response_text})
+
+            await send_json({"type": "tts_end"})
+            await send_json({"type": "assistant_text", "text": response_text})
 
             # ── Productive struggle tracking ──────────────────────────────────
             if is_productive and not contains_fallback(response_text):

@@ -77,7 +77,7 @@ export default function DrillsPage() {
             <div className="flex-1 bg-gray-700 rounded-full h-1.5">
               <div
                 className="bg-aki-blue rounded-full h-1.5 transition-all"
-                style={{ width: `${(currentIndex / cards.length) * 100}%` }}
+                style={{ width: `${((currentIndex + 1) / cards.length) * 100}%` }}
               />
             </div>
             <span className="text-xs text-gray-400">

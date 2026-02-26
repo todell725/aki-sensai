@@ -6,6 +6,56 @@ import { getShadowingLines, analyzePitch, type PitchContour, type PitchCompareRe
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/**
+ * Decode any browser-recorded audio blob (webm/opus, ogg, wav…) via AudioContext,
+ * then re-encode as a 16kHz mono 16-bit WAV that librosa/soundfile can read reliably.
+ */
+async function normalizeToWav(blob: Blob): Promise<Blob> {
+  const arrayBuf = await blob.arrayBuffer();
+  const ctx = new AudioContext({ sampleRate: 16000 });
+  let audioBuffer: AudioBuffer;
+  try {
+    audioBuffer = await ctx.decodeAudioData(arrayBuf);
+  } finally {
+    await ctx.close();
+  }
+
+  // Mix down to mono and resample to 16 kHz (AudioContext handles resampling)
+  const samples = audioBuffer.getChannelData(0);
+  const numSamples = samples.length;
+
+  // WAV header: RIFF/PCM 16-bit mono
+  const byteLength = 44 + numSamples * 2;
+  const buffer = new ArrayBuffer(byteLength);
+  const view = new DataView(buffer);
+
+  const writeStr = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, byteLength - 8, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);       // chunk size
+  view.setUint16(20, 1, true);        // PCM
+  view.setUint16(22, 1, true);        // mono
+  view.setUint32(24, 16000, true);    // sample rate
+  view.setUint32(28, 16000 * 2, true); // byte rate
+  view.setUint16(32, 2, true);        // block align
+  view.setUint16(34, 16, true);       // bits per sample
+  writeStr(36, "data");
+  view.setUint32(40, numSamples * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < numSamples; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
 interface ShadowingLine {
   card_id: number;
   lemma: string;
@@ -74,7 +124,14 @@ export default function ShadowingPage() {
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
+
+      // Prefer WAV if the browser supports it; fall back to whatever is available.
+      const mimeType = MediaRecorder.isTypeSupported("audio/wav")
+        ? "audio/wav"
+        : MediaRecorder.isTypeSupported("audio/webm;codecs=pcm")
+        ? "audio/webm;codecs=pcm"
+        : "";
+      const mr = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       audioChunksRef.current = [];
 
       mr.ondataavailable = (e) => {
@@ -82,9 +139,11 @@ export default function ShadowingPage() {
       };
 
       mr.onstop = async () => {
-        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const nativeBlob = new Blob(audioChunksRef.current, { type: mr.mimeType });
         stream.getTracks().forEach((t) => t.stop());
-        await submitAttempt(blob);
+        // Normalize to WAV via AudioContext so the backend always receives PCM audio
+        const wavBlob = await normalizeToWav(nativeBlob);
+        await submitAttempt(wavBlob);
       };
 
       mr.start();
@@ -100,19 +159,15 @@ export default function ShadowingPage() {
     setIsRecording(false);
   };
 
-  const submitAttempt = async (blob: Blob) => {
+  const submitAttempt = async (wavBlob: Blob) => {
     if (!currentLine) return;
     try {
-      const arrayBuf = await blob.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuf);
+      const form = new FormData();
+      form.append("audio_file", wavBlob, "attempt.wav");
 
       const res = await fetch(
         `${API_BASE}/drills/shadowing/${currentLine.card_id}/compare`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/octet-stream" },
-          body: bytes,
-        },
+        { method: "POST", body: form },
       );
 
       if (!res.ok) throw new Error("Compare failed");
